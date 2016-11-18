@@ -200,7 +200,49 @@ class ContextMenuManager
     menuTemplate = @templateForEvent(event)
 
     return unless menuTemplate?.length > 0
-    remote.getCurrentWindow().emit('context-menu', menuTemplate)
+
+    display = ->
+      remote.getCurrentWindow().emit('context-menu', menuTemplate)
+
+    # Electron has an issue where displaying the context menu pauses the
+    # rendering loop. https://github.com/electron/electron/issues/1854
+    #
+    # One unfortunate side effect is that when you right click
+    # on an element, the dom mutations to highlight the element have not been
+    # flushed yet which makes for a very bad user experience
+    # https://github.com/atom/atom/issues/2991
+    #
+    # In order to solve this issue, we would like to flush the mutations and
+    # only then display the menu. Unfortunately, electron doesn't have APIs
+    # for that.
+    #
+    # Things I (vjeux) have tried:
+    #  1) Electron has browserWindow.webContents.invalidate() and
+    #     .on('paint' -> ...) but it only works with offscreen rendering which
+    #     atom doesn't use.
+    #
+    #  2) .capturePage(-> ...) takes a screenshot of the page and I hoped it
+    #     would do a flush first but it inconsistently displays the highlight
+    #     so it won't work.
+    #
+    #  3) Using setTimeout((-> ...), 16) works many times but not always
+    #
+    #  4) requestAnimationFrame(-> ...) should be what we want but unfortunately
+    #     it doesn't always show the highlights :(
+    #
+    # What I found worked was to nest three requestAnimationFrame, it works
+    # all the time even when my machine is busy. This is not a 100% solution
+    # but I think that it's okay to assume that if the highlight hasn't been
+    # updated in three frames then you should probably try and optimize your
+    # code. 3 frames is 50ms and that delay isn't noticeable.
+    if process.platform is 'win32'
+      display()
+    else
+      requestAnimationFrame ->
+        requestAnimationFrame ->
+          requestAnimationFrame ->
+            display()
+
     return
 
   clear: ->
